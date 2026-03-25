@@ -1,0 +1,249 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>GestureVolume - Hand Gesture Control</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>GestureVolume - Hand Gesture Control</h1>
+        </header>
+
+        <div class="content">
+            <div class="video-section">
+                <img id="video-feed" src="{{ url_for('video_feed') }}" alt="Video Feed">
+            </div>
+
+            <div class="controls-section">
+                <div class="panel">
+                    <h2>Camera Controls</h2>
+                    <div class="button-group">
+                        <button id="start-btn" class="btn btn-start" onclick="startCamera()">
+                            Start
+                        </button>
+                        <button id="stop-btn" class="btn btn-stop" onclick="stopCamera()">
+                            Stop
+                        </button>
+                    </div>
+                </div>
+
+                <div class="panel">
+                    <h2>System Status</h2>
+
+                    <div class="status-grid">
+                        <div class="status-item">
+                            <div class="status-label">CAMERA</div>
+                            <div id="camera-status" class="status-value status-inactive">
+                                <span class="status-dot"></span>
+                                Inactive
+                            </div>
+                        </div>
+
+                        <div class="status-item">
+                            <div class="status-label">GESTURE STATUS</div>
+                            <div id="gesture-status" class="status-value status-inactive">
+                                <span class="status-dot"></span>
+                                Waiting
+                            </div>
+                        </div>
+
+                        <div class="status-item">
+                            <div class="status-label">GESTURE TYPE</div>
+                            <div id="gesture-type" class="status-value status-neutral">
+                                None
+                            </div>
+                        </div>
+
+                        <div class="status-item">
+                            <div class="status-label">GESTURE QUALITY</div>
+                            <div id="gesture-quality" class="status-value status-good">
+                                --
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="panel">
+                    <h2>Volume Control</h2>
+                    <div class="volume-display">
+                        <div class="volume-text">
+                            <span id="volume-level">50</span>%
+                        </div>
+                        <div class="volume-bar-container">
+                            <div id="volume-bar" class="volume-bar" style="width: 50%"></div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="panel trend-panel">
+                    <h3>Volume Trend</h3>
+                    <div class="trend-wrap">
+                        <canvas id="volume-trend" width="420" height="220"></canvas>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const videoFeed = document.getElementById('video-feed');
+        const liveFeedUrl = "{{ url_for('video_feed') }}";
+        const placeholderUrl = "{{ url_for('placeholder_frame') }}";
+        const trendCanvas = document.getElementById('volume-trend');
+        const trendCtx = trendCanvas.getContext('2d');
+        const volumeHistory = [];
+        const MAX_POINTS = 36;
+
+        setInterval(updateStatus, 350);
+
+        function drawTrendGraph() {
+            const width = trendCanvas.width;
+            const height = trendCanvas.height;
+            const left = 44;
+            const right = width - 16;
+            const top = 24;
+            const bottom = height - 30;
+
+            trendCtx.clearRect(0, 0, width, height);
+
+            trendCtx.fillStyle = '#fffaf3';
+            trendCtx.fillRect(0, 0, width, height);
+
+            trendCtx.fillStyle = '#44515f';
+            trendCtx.font = '12px Segoe UI';
+            trendCtx.fillText('100', 8, top + 4);
+            trendCtx.fillText('75', 14, top + (bottom - top) * 0.28);
+            trendCtx.fillText('50', 14, top + (bottom - top) * 0.53);
+            trendCtx.fillText('25', 14, top + (bottom - top) * 0.78);
+            trendCtx.fillText('0', 20, bottom + 4);
+
+            trendCtx.strokeStyle = 'rgba(106, 117, 132, 0.24)';
+            trendCtx.lineWidth = 1;
+            [0, 25, 50, 75, 100].forEach(level => {
+                const y = bottom - ((level / 100) * (bottom - top));
+                trendCtx.beginPath();
+                trendCtx.moveTo(left, y);
+                trendCtx.lineTo(right, y);
+                trendCtx.stroke();
+            });
+
+            trendCtx.strokeStyle = '#d9c8b2';
+            trendCtx.strokeRect(left, top, right - left, bottom - top);
+
+            if (volumeHistory.length < 2) {
+                trendCtx.fillStyle = '#8d97a5';
+                trendCtx.font = '15px Segoe UI';
+                trendCtx.fillText('Trend will appear after camera data updates.', 56, height / 2);
+                return;
+            }
+
+            trendCtx.beginPath();
+            volumeHistory.forEach((value, index) => {
+                const x = left + (index / (MAX_POINTS - 1)) * (right - left);
+                const y = bottom - ((value / 100) * (bottom - top));
+                if (index === 0) {
+                    trendCtx.moveTo(x, y);
+                } else {
+                    trendCtx.lineTo(x, y);
+                }
+            });
+            trendCtx.strokeStyle = '#cc7642';
+            trendCtx.lineWidth = 3;
+            trendCtx.stroke();
+
+            const lastIndex = volumeHistory.length - 1;
+            const lastX = left + (lastIndex / (MAX_POINTS - 1)) * (right - left);
+            const lastY = bottom - ((volumeHistory[lastIndex] / 100) * (bottom - top));
+            trendCtx.beginPath();
+            trendCtx.arc(lastX, lastY, 5, 0, Math.PI * 2);
+            trendCtx.fillStyle = '#2fa36b';
+            trendCtx.fill();
+        }
+
+        function updateStatus() {
+            fetch('/status')
+                .then(response => response.json())
+                .then(data => {
+                    const cameraStatus = document.getElementById('camera-status');
+                    if (data.camera_active) {
+                        cameraStatus.innerHTML = '<span class="status-dot"></span> Active';
+                        cameraStatus.className = 'status-value status-active';
+                    } else {
+                        cameraStatus.innerHTML = '<span class="status-dot"></span> Inactive';
+                        cameraStatus.className = 'status-value status-inactive';
+                    }
+
+                    const gestureStatus = document.getElementById('gesture-status');
+                    if (data.hand_detected) {
+                        gestureStatus.innerHTML = '<span class="status-dot"></span> Detecting';
+                        gestureStatus.className = 'status-value status-detecting';
+                    } else if (data.camera_active) {
+                        gestureStatus.innerHTML = '<span class="status-dot"></span> No Hand';
+                        gestureStatus.className = 'status-value status-warning';
+                    } else {
+                        gestureStatus.innerHTML = '<span class="status-dot"></span> Waiting';
+                        gestureStatus.className = 'status-value status-inactive';
+                    }
+
+                    const gestureType = document.getElementById('gesture-type');
+                    gestureType.textContent = data.gesture;
+                    if (data.gesture === 'Volume Up') {
+                        gestureType.className = 'status-value status-good';
+                    } else if (data.gesture === 'Volume Down') {
+                        gestureType.className = 'status-value status-warning';
+                    } else {
+                        gestureType.className = 'status-value status-neutral';
+                    }
+
+                    const gestureQuality = document.getElementById('gesture-quality');
+                    gestureQuality.textContent = data.quality;
+                    if (data.quality === 'Excellent') {
+                        gestureQuality.className = 'status-value status-excellent';
+                    } else if (data.quality === 'Good') {
+                        gestureQuality.className = 'status-value status-good';
+                    } else {
+                        gestureQuality.className = 'status-value status-neutral';
+                    }
+
+                    const volumeLevel = document.getElementById('volume-level');
+                    const volumeBar = document.getElementById('volume-bar');
+                    volumeLevel.textContent = data.volume;
+                    volumeBar.style.width = data.volume + '%';
+
+                    volumeHistory.push(data.volume);
+                    if (volumeHistory.length > MAX_POINTS) {
+                        volumeHistory.shift();
+                    }
+                    drawTrendGraph();
+                })
+                .catch(error => console.error('Error fetching status:', error));
+        }
+
+        function startCamera() {
+            fetch('/start_camera', { method: 'POST' })
+                .then(response => response.json())
+                .then(() => {
+                    videoFeed.src = liveFeedUrl + '?t=' + Date.now();
+                    videoFeed.style.display = 'block';
+                })
+                .catch(error => console.error('Error starting camera:', error));
+        }
+
+        function stopCamera() {
+            fetch('/stop_camera', { method: 'POST' })
+                .then(response => response.json())
+                .then(() => {
+                    videoFeed.src = placeholderUrl + '?t=' + Date.now();
+                    volumeHistory.length = 0;
+                    drawTrendGraph();
+                })
+                .catch(error => console.error('Error stopping camera:', error));
+        }
+
+        drawTrendGraph();
+    </script>
+</body>
+</html>
